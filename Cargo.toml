@@ -1,0 +1,28 @@
+[package]
+name = "rdp-channel-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log="0.4"
+env_logger="0.11"
+tokio = { version = "1", features = ["full"] }
+anyhow="1"
+
+# Required for IronRDP
+rustls= {version="0.23", features=["ring"]}
+ironrdp={ version="0.9", features=["session", "input", "graphics", "dvc", "svc", "displaycontrol", "connector", "rdpdr", "rdpsnd", "cliprdr"]}
+ironrdp-core={version="0.1"}
+ironrdp-cliprdr-native = { version = "0.2" }
+ironrdp-rdpsnd-native = { version = "0.2" }
+ironrdp-tls = { version = "0.1", features=["rustls"] }
+ironrdp-tokio = { version = "0.3" }
+sspi = { version = "0.15", features = ["network_client", "dns_resolver"] }
+reqwest = { version = "0.12", features = ["json", "cookies"] }
+url="2.2.0"
+
+# Egui ui
+eframe={version="0.31", features=["default_fonts", "wgpu"]}
+
+# Command line arguments 
+clap={version="4.5", features=["derive"] }
