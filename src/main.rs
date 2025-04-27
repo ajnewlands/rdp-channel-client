@@ -17,7 +17,7 @@ fn main() -> anyhow::Result<()> {
     let cli = cli::Cli::parse();
 
     let credentials = RDPCredentials::new(cli.username, cli.password, cli.domain);
-    let rdp = RDPSession::from_credentials(credentials);
+    let rdp = RDPSession::from_credentials(credentials).with_dynamic_channels(cli.dynamic_channels);
 
     // So we can pass a handle to the egui context back to the RDP thread,
     // allowing it to trigger a repaint when the view should update.

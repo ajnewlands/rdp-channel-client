@@ -1,14 +1,17 @@
 use anyhow::anyhow;
 use eframe::egui;
 use ironrdp::connector::{self, Credentials};
+use ironrdp::dvc::{encode_dvc_messages, DrdynvcClient, DvcEncode};
 use ironrdp::pdu::rdp::capability_sets::MajorPlatformType;
 use ironrdp::pdu::rdp::client_info::PerformanceFlags;
 use ironrdp::session::image::DecodedImage;
 use ironrdp::session::{ActiveStage, ActiveStageOutput};
+use ironrdp::svc::{ChannelFlags, SvcProcessorMessages};
 use ironrdp_tokio::{split_tokio_framed, FramedWrite};
 use log::{debug, info};
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpStream;
+use vc::{GenericChannel, GenericChannelMessage};
 
 mod network_client;
 pub mod vc;
@@ -19,6 +22,7 @@ pub struct RDPSession {
     width: u16,
     height: u16,
     config: connector::Config,
+    dynamic_virtual_channels: Option<Vec<String>>,
 }
 
 // TODO be nice to have a builder pattern and default port (viz. 3389)
@@ -90,7 +94,13 @@ impl RDPSession {
             width,
             height,
             config,
+            dynamic_virtual_channels: None,
         }
+    }
+
+    pub fn with_dynamic_channels(mut self, dynamic_channels: Option<Vec<String>>) -> Self {
+        self.dynamic_virtual_channels = dynamic_channels;
+        self
     }
 
     pub async fn connect(
@@ -107,15 +117,14 @@ impl RDPSession {
 
         let mut framed = ironrdp_tokio::TokioFramed::new(stream);
 
-        let echo_channel = vc::GenericChannel::new("2steps::upstream".into());
-        let down_channel = vc::GenericChannel::new("2steps::downstream".into());
+        let mut dynamic_channels = ironrdp::dvc::DrdynvcClient::new();
+        for vc in self.dynamic_virtual_channels.clone().unwrap_or_default() {
+            dynamic_channels =
+                dynamic_channels.with_dynamic_channel(vc::GenericChannel::new(vc.to_owned()));
+        }
         let mut connector = connector::ClientConnector::new(self.config.clone())
             .with_server_addr(addr)
-            .with_static_channel(
-                ironrdp::dvc::DrdynvcClient::new()
-                    .with_dynamic_channel(echo_channel)
-                    .with_dynamic_channel(down_channel),
-            );
+            .with_static_channel(dynamic_channels);
 
         let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector).await?;
         let initial_stream = framed.into_inner_no_leftover();
@@ -165,7 +174,6 @@ impl RDPSession {
         let egui_ctx = rctx.await?;
         info!("RDP session waiting for GUI context");
         let shared_frame_buffer = tx.borrow().clone();
-
         loop {
             let outputs = tokio::select! {
                 frame = reader.read_pdu() => {

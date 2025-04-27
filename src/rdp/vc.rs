@@ -1,6 +1,5 @@
 use ironrdp::dvc::{DvcEncode, DvcProcessor};
 use ironrdp_core::{impl_as_any, Encode};
-use log::error;
 
 #[derive(Debug)]
 pub struct GenericChannel {
@@ -20,10 +19,9 @@ impl DvcProcessor for GenericChannel {
         &self.name
     }
 
-    fn start(
-        &mut self,
-        _channel_id: u32,
-    ) -> ironrdp::pdu::PduResult<Vec<ironrdp::dvc::DvcMessage>> {
+    fn start(&mut self, channel_id: u32) -> ironrdp::pdu::PduResult<Vec<ironrdp::dvc::DvcMessage>> {
+        // TODO this is how we can differentiate the IDs for multiple GenericChannels
+        log::info!("Started channel {} with id {}", self.name, channel_id);
         Ok(Vec::default())
     }
 
@@ -32,6 +30,11 @@ impl DvcProcessor for GenericChannel {
         _channel_id: u32,
         payload: &[u8],
     ) -> ironrdp::pdu::PduResult<Vec<ironrdp::dvc::DvcMessage>> {
+        log::debug!(
+            "Channel '{}' Processing payload: {} ",
+            self.name,
+            String::from_utf8_lossy(payload),
+        );
         Ok(Vec::default())
     }
 }
@@ -50,7 +53,7 @@ unsafe impl Send for GenericChannelMessage {}
 
 impl Encode for GenericChannelMessage {
     fn name(&self) -> &'static str {
-        ""
+        "GENERIC"
     }
 
     fn encode(&self, dst: &mut ironrdp_core::WriteCursor<'_>) -> ironrdp_core::EncodeResult<()> {

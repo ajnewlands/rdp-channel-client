@@ -11,4 +11,6 @@ pub struct Cli {
     #[arg(short = 'P', long, default_value_t = 3389)]
     pub port: u16,
     pub host: String,
+    #[arg(short = 'D', long, value_delimiter = ',')]
+    pub dynamic_channels: Option<Vec<String>>,
 }
