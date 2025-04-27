@@ -7,9 +7,11 @@ use ironrdp::session::image::DecodedImage;
 use ironrdp::session::{ActiveStage, ActiveStageOutput};
 use ironrdp_tokio::{split_tokio_framed, FramedWrite};
 use log::{debug, info};
+use std::sync::{Arc, Mutex};
 use tokio::net::TcpStream;
 
 mod network_client;
+pub mod vc;
 
 type UpgradedFramed = ironrdp_tokio::TokioFramed<ironrdp_tls::TlsStream<TcpStream>>;
 
@@ -24,6 +26,13 @@ pub struct RDPCredentials {
     username: String,
     password: String,
     domain: Option<String>,
+}
+
+#[derive(Default)]
+pub struct RDPSharedFramebuffer {
+    pub image: Option<Vec<u8>>,
+    pub height: u16,
+    pub width: u16,
 }
 
 impl RDPCredentials {
@@ -98,8 +107,15 @@ impl RDPSession {
 
         let mut framed = ironrdp_tokio::TokioFramed::new(stream);
 
-        let mut connector =
-            connector::ClientConnector::new(self.config.clone()).with_server_addr(addr);
+        let echo_channel = vc::GenericChannel::new("2steps::upstream".into());
+        let down_channel = vc::GenericChannel::new("2steps::downstream".into());
+        let mut connector = connector::ClientConnector::new(self.config.clone())
+            .with_server_addr(addr)
+            .with_static_channel(
+                ironrdp::dvc::DrdynvcClient::new()
+                    .with_dynamic_channel(echo_channel)
+                    .with_dynamic_channel(down_channel),
+            );
 
         let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector).await?;
         let initial_stream = framed.into_inner_no_leftover();
@@ -132,7 +148,7 @@ impl RDPSession {
     pub async fn session_thread(
         framed: UpgradedFramed,
         connection_result: connector::ConnectionResult,
-        tx: tokio::sync::watch::Sender<Vec<u8>>,
+        tx: tokio::sync::watch::Sender<Arc<Mutex<RDPSharedFramebuffer>>>,
         rctx: tokio::sync::oneshot::Receiver<egui::Context>,
     ) -> anyhow::Result<()> {
         let (mut reader, mut writer) = split_tokio_framed(framed);
@@ -148,6 +164,7 @@ impl RDPSession {
 
         let egui_ctx = rctx.await?;
         info!("RDP session waiting for GUI context");
+        let shared_frame_buffer = tx.borrow().clone();
 
         loop {
             let outputs = tokio::select! {
@@ -161,7 +178,19 @@ impl RDPSession {
                 match out {
                     ActiveStageOutput::ResponseFrame(frame) => writer.write_all(&frame).await?,
                     ActiveStageOutput::GraphicsUpdate(_region) => {
-                        if let Err(e) = tx.send(image.data().to_vec()) {
+                        // We don't want to do any compute in here, because it is called very frequently
+                        // for incremental changes. Better to that in the GUI thread in batches.
+                        {
+                            let mut locked = shared_frame_buffer
+                                .lock()
+                                .expect("Failed to locked shared framebuffer");
+                            // Just take a simple copy of the image buffer which the GUI thread can convert
+                            // into a GPU texture.
+                            locked.image = Some(image.data().to_vec());
+                            locked.width = width;
+                            locked.height = height;
+                        }
+                        if let Err(e) = tx.send(shared_frame_buffer.clone()) {
                             return Err(anyhow!("Failed sending image data to GUI: {}", e));
                         }
                         egui_ctx.request_repaint();

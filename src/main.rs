@@ -3,7 +3,8 @@ mod gui;
 mod rdp;
 use clap::Parser;
 use eframe::egui;
-use rdp::{RDPCredentials, RDPSession};
+use rdp::{RDPCredentials, RDPSession, RDPSharedFramebuffer};
+use std::sync::{Arc, Mutex};
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
@@ -21,7 +22,8 @@ fn main() -> anyhow::Result<()> {
     // So we can pass a handle to the egui context back to the RDP thread,
     // allowing it to trigger a repaint when the view should update.
     let (tctx, rctx) = tokio::sync::oneshot::channel::<egui::Context>();
-    let (tx, rx) = tokio::sync::watch::channel::<Vec<u8>>(Vec::default());
+    let (tx, rx) =
+        tokio::sync::watch::channel::<Arc<Mutex<RDPSharedFramebuffer>>>(Default::default());
     // TODO handle error in initial thread creation.
     let rdp_session_thread = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()

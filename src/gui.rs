@@ -1,18 +1,20 @@
-use std::mem;
+use std::sync::{Arc, Mutex};
 
 use eframe::egui::{
     self, load::SizedTexture, Color32, ColorImage, Image, TextureHandle, TextureOptions, Vec2,
 };
 
+use crate::rdp::RDPSharedFramebuffer;
+
 pub struct App {
     pub texture_handle: TextureHandle,
-    pub rx: tokio::sync::watch::Receiver<Vec<u8>>,
+    pub rx: tokio::sync::watch::Receiver<Arc<Mutex<RDPSharedFramebuffer>>>,
 }
 
 impl App {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
-        rx: tokio::sync::watch::Receiver<Vec<u8>>,
+        rx: tokio::sync::watch::Receiver<Arc<Mutex<RDPSharedFramebuffer>>>,
         tctx: tokio::sync::oneshot::Sender<egui::Context>,
     ) -> Self {
         let texture_handle =
@@ -34,30 +36,34 @@ impl eframe::App for App {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                     // TODO handle possible error.
                     if self.rx.has_changed().unwrap() {
-                        // TODO better way to express initial lack of texture.
-                        let bytes = self.rx.borrow().clone();
-                        if bytes.len() > 0 {
-                            let length = bytes.len() / 4;
-                            let p = bytes.as_ptr() as *mut Color32;
-                            let pixels = unsafe { Vec::from_raw_parts(p, length, length) };
-                            mem::forget(bytes);
-                            let image = egui::ColorImage {
-                                size: [1024, 768], // TODO, temporary nasty hack.
-                                pixels,
-                            };
-                            self.texture_handle
-                                .set(image, egui::TextureOptions::NEAREST);
+                        {
+                            let shared_framebuffer = self.rx.borrow().clone();
+                            let mut locked = shared_framebuffer
+                                .lock()
+                                .expect("Failed to lock shared framebuffer");
+                            // This slightly manky approach to updating the framebuffer manages to
+                            // play full motion video in a debug build.
+                            if let Some(mut image) = locked.image.take() {
+                                let p_image = image.as_mut_ptr() as *mut Color32;
+                                let size = locked.width as usize * locked.height as usize;
+                                let pixels =
+                                    unsafe { Vec::from_raw_parts(p_image, size, size).clone() };
+                                std::mem::forget(image);
+                                let image = egui::ColorImage {
+                                    pixels,
+                                    size: [locked.width as usize, locked.height as usize],
+                                };
+                                // TODO reset displayed frame when image is None.
+                                self.texture_handle
+                                    .set(image, egui::TextureOptions::NEAREST);
+                            }
                         }
                     }
 
                     ui.add(
                         Image::new(SizedTexture::new(
                             self.texture_handle.id(),
-                            // TODO hardcoded size.
-                            Vec2 {
-                                x: 1024.0,
-                                y: 768.0,
-                            },
+                            self.texture_handle.size_vec2(),
                         ))
                         .shrink_to_fit(),
                     );
