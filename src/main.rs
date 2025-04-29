@@ -3,7 +3,7 @@ mod gui;
 mod rdp;
 use clap::Parser;
 use eframe::egui;
-use rdp::{RDPCredentials, RDPSession, RDPSharedFramebuffer};
+use rdp::{RDPCredentials, RDPMousePosition, RDPSession, RDPSharedFramebuffer};
 use std::sync::{Arc, Mutex};
 
 fn main() -> anyhow::Result<()> {
@@ -24,6 +24,7 @@ fn main() -> anyhow::Result<()> {
     let (tctx, rctx) = tokio::sync::oneshot::channel::<egui::Context>();
     let (tx, rx) =
         tokio::sync::watch::channel::<Arc<Mutex<RDPSharedFramebuffer>>>(Default::default());
+    let (mouse_tx, mouse_rx) = tokio::sync::watch::channel::<RDPMousePosition>(Default::default());
     // TODO handle error in initial thread creation.
     let rdp_session_thread = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -36,6 +37,7 @@ fn main() -> anyhow::Result<()> {
             framed,
             connection_result,
             tx,
+            mouse_rx,
             rctx,
         ))
     });
@@ -50,7 +52,7 @@ fn main() -> anyhow::Result<()> {
     if let Err(e) = eframe::run_native(
         "RDP",
         native_options,
-        Box::new(|cc| Ok(Box::new(gui::App::new(cc, rx, tctx)))),
+        Box::new(|cc| Ok(Box::new(gui::App::new(cc, rx, mouse_tx, tctx)))),
     ) {
         log::error!("Failed to instantiate GUI: {}", e);
         std::process::exit(1);

@@ -1,20 +1,22 @@
 use std::sync::{Arc, Mutex};
 
 use eframe::egui::{
-    self, load::SizedTexture, Color32, ColorImage, Image, TextureHandle, TextureOptions, Vec2,
+    self, load::SizedTexture, Color32, ColorImage, Image, TextureHandle, TextureOptions,
 };
 
-use crate::rdp::RDPSharedFramebuffer;
+use crate::rdp::{RDPMousePosition, RDPSharedFramebuffer};
 
 pub struct App {
     pub texture_handle: TextureHandle,
     pub rx: tokio::sync::watch::Receiver<Arc<Mutex<RDPSharedFramebuffer>>>,
+    pub mouse_tx: tokio::sync::watch::Sender<RDPMousePosition>,
 }
 
 impl App {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         rx: tokio::sync::watch::Receiver<Arc<Mutex<RDPSharedFramebuffer>>>,
+        mouse_tx: tokio::sync::watch::Sender<RDPMousePosition>,
         tctx: tokio::sync::oneshot::Sender<egui::Context>,
     ) -> Self {
         let texture_handle =
@@ -24,7 +26,11 @@ impl App {
             .expect("Failed to pass egui context to RDP session.");
         // We can then update the image via set partial
         // texture_handle.set_partial(pos, image, options);
-        Self { texture_handle, rx }
+        Self {
+            texture_handle,
+            rx,
+            mouse_tx,
+        }
     }
 }
 
@@ -34,6 +40,16 @@ impl eframe::App for App {
             .frame(egui::Frame::NONE) // Remove default borders around the RDP view.
             .show(ctx, |ui| {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                    if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
+                        let bounds = ctx.screen_rect();
+                        let x = f32::min(f32::max(pos.x, bounds.min.x), bounds.max.x) as u16;
+                        let y = f32::min(f32::max(pos.y, bounds.min.y), bounds.max.y) as u16;
+                        let last_pos = self.mouse_tx.borrow().clone();
+                        if last_pos.x != x || last_pos.y != y {
+                            self.mouse_tx.send(RDPMousePosition { x, y });
+                        }
+                    }
+
                     // TODO handle possible error.
                     if self.rx.has_changed().unwrap() {
                         {

@@ -2,6 +2,9 @@ use anyhow::anyhow;
 use eframe::egui;
 use ironrdp::connector::{self, Credentials};
 use ironrdp::dvc::{encode_dvc_messages, DrdynvcClient, DvcEncode};
+use ironrdp::pdu::input::fast_path::FastPathInputEvent;
+use ironrdp::pdu::input::mouse::PointerFlags;
+use ironrdp::pdu::input::MousePdu;
 use ironrdp::pdu::rdp::capability_sets::MajorPlatformType;
 use ironrdp::pdu::rdp::client_info::PerformanceFlags;
 use ironrdp::session::image::DecodedImage;
@@ -30,6 +33,12 @@ pub struct RDPCredentials {
     username: String,
     password: String,
     domain: Option<String>,
+}
+
+#[derive(Default, Clone)]
+pub struct RDPMousePosition {
+    pub x: u16,
+    pub y: u16,
 }
 
 #[derive(Default)]
@@ -158,6 +167,7 @@ impl RDPSession {
         framed: UpgradedFramed,
         connection_result: connector::ConnectionResult,
         tx: tokio::sync::watch::Sender<Arc<Mutex<RDPSharedFramebuffer>>>,
+        mut mouse_rx: tokio::sync::watch::Receiver<RDPMousePosition>,
         rctx: tokio::sync::oneshot::Receiver<egui::Context>,
     ) -> anyhow::Result<()> {
         let (mut reader, mut writer) = split_tokio_framed(framed);
@@ -176,9 +186,17 @@ impl RDPSession {
         let shared_frame_buffer = tx.borrow().clone();
         loop {
             let outputs = tokio::select! {
+                biased; // make sure we mouse events aren't overwhelming
                 frame = reader.read_pdu() => {
                     let (action, payload) = frame?;
                     active_stage.process(&mut image, action, &payload)?
+                }
+                changed = mouse_rx.changed() => match changed {
+                    Ok(()) => {
+                        let p = mouse_rx.borrow().clone();
+                        active_stage.process_fastpath_input(&mut image,&vec![FastPathInputEvent::MouseEvent(MousePdu{x_position: p.x, y_position: p.y, flags: PointerFlags::MOVE, number_of_wheel_rotation_units: 0})] )?
+                    },
+                    Err(_) => return Err(anyhow!("Mouse position channel has closed")),
                 }
             };
 
