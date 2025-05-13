@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use tokio::net::TcpStream;
 use vc::{GenericChannel, GenericChannelMessage};
 
+pub mod keyboard;
 mod network_client;
 pub mod vc;
 
@@ -168,6 +169,7 @@ impl RDPSession {
         connection_result: connector::ConnectionResult,
         tx: tokio::sync::watch::Sender<Arc<Mutex<RDPSharedFramebuffer>>>,
         mut mouse_rx: tokio::sync::watch::Receiver<RDPMousePosition>,
+        mut rdp_input_rx: tokio::sync::mpsc::Receiver<Vec<FastPathInputEvent>>,
         rctx: tokio::sync::oneshot::Receiver<egui::Context>,
     ) -> anyhow::Result<()> {
         let (mut reader, mut writer) = split_tokio_framed(framed);
@@ -190,13 +192,19 @@ impl RDPSession {
                 frame = reader.read_pdu() => {
                     let (action, payload) = frame?;
                     active_stage.process(&mut image, action, &payload)?
-                }
+                },
                 changed = mouse_rx.changed() => match changed {
                     Ok(()) => {
                         let p = mouse_rx.borrow().clone();
                         active_stage.process_fastpath_input(&mut image,&vec![FastPathInputEvent::MouseEvent(MousePdu{x_position: p.x, y_position: p.y, flags: PointerFlags::MOVE, number_of_wheel_rotation_units: 0})] )?
                     },
                     Err(_) => return Err(anyhow!("Mouse position channel has closed")),
+                },
+                recv = rdp_input_rx.recv() => match recv {
+                    Some(events) => {
+                        active_stage.process_fastpath_input(&mut image, &events)?
+                    }
+                    None => return Err(anyhow!("Input event channel has closed")),
                 }
             };
 
